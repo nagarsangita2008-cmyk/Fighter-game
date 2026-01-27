@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Superhero vs Villain - Mobile</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; touch-action: none; font-family: sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        
+        /* UI HUD */
+        #hud { position: absolute; top: 15px; left: 20px; color: white; font-weight: bold; font-size: 22px; text-shadow: 2px 2px #000; pointer-events: none; }
+        #boss-life { position: absolute; top: 15px; right: 20px; font-size: 26px; pointer-events: none; }
+
+        /* Mobile Controls */
+        .controls { position: absolute; bottom: 25px; width: 100%; display: flex; justify-content: space-between; padding: 0 30px; box-sizing: border-box; }
+        .group { display: flex; gap: 20px; }
+        .btn { width: 90px; height: 70px; background: rgba(255,255,255,0.2); border: 3px solid #fff; border-radius: 15px; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; -webkit-user-select: none; }
+        .btn:active { background: rgba(255,255,255,0.5); transform: scale(0.9); }
+        #fire-btn { background: rgba(220, 53, 69, 0.5); border-color: #ff4d4d; }
+        #jump-btn { background: rgba(40, 167, 69, 0.5); border-color: #5dff5d; }
+    </style>
+</head>
+<body>
+
+    <div id="hud">AMMO: <span id="ammo">10</span></div>
+    <div id="boss-life">❤️❤️❤️</div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="controls">
+        <div class="group">
+            <div class="btn" id="left-btn">⬅️</div>
+            <div class="btn" id="right-btn">➡️</div>
+        </div>
+        <div class="group">
+            <div class="btn" id="jump-btn">JUMP</div>
+            <div class="btn" id="fire-btn">FIRE</div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const ammoText = document.getElementById('ammo');
+    const heartText = document.getElementById('boss-life');
+
+    let w, h, groundY;
+    const hero = { x: 80, y: 0, w: 50, h: 85, vx: 0, vy: 0, speed: 6, jump: -16, ammo: 10, ground: false, dir: 1 };
+    const boss = { x: 0, y: 0, w: 90, h: 120, hp: 3, hits: 0, pain: 0, shield: false };
+    let bullets = [];
+
+    function setup() {
+        w = canvas.width = window.innerWidth;
+        h = canvas.height = window.innerHeight;
+        groundY = h * 0.75;
+        hero.y = groundY - hero.h;
+        boss.x = w - 200;
+        boss.y = groundY - boss.h;
+    }
+
+    // --- CONTROLS LOGIC ---
+    const keys = {};
+    const bindBtn = (id, action) => {
+        const el = document.getElementById(id);
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); action(true); });
+        el.addEventListener('touchend', (e) => { e.preventDefault(); action(false); });
+    };
+
+    bindBtn('left-btn', (isDown) => { hero.vx = isDown ? -hero.speed : 0; if(isDown) hero.dir = -1; });
+    bindBtn('right-btn', (isDown) => { hero.vx = isDown ? hero.speed : 0; if(isDown) hero.dir = 1; });
+    
+    document.getElementById('jump-btn').ontouchstart = (e) => {
+        e.preventDefault(); if(hero.ground) { hero.vy = hero.jump; hero.ground = false; }
+    };
+
+    document.getElementById('fire-btn').ontouchstart = (e) => {
+        e.preventDefault();
+        if(hero.ammo > 0) {
+            hero.ammo--; ammoText.innerText = hero.ammo;
+            bullets.push({ x: hero.x + (hero.dir === 1 ? hero.w : 0), y: hero.y + 40, vx: hero.dir * 14 });
+        }
+    };
+
+    function update() {
+        // Hero Physics
+        hero.vy += 0.8; hero.x += hero.vx; hero.y += hero.vy;
+        if(hero.y + hero.h > groundY) { hero.y = groundY - hero.h; hero.vy = 0; hero.ground = true; }
+        if(hero.x < 0) hero.x = 0; if(hero.x > w - hero.w) hero.x = w - hero.w;
+
+        // Boss AI & Shield
+        let bulletIncoming = bullets.some(b => b.vx > 0 && b.x > boss.x - 200 && b.x < boss.x);
+        boss.shield = bulletIncoming;
+        if(!boss.shield && boss.pain <= 0) boss.x -= 1;
+
+        // Pain timer
+        if(boss.pain > 0) boss.pain--;
+
+        // Bullet Collision
+        bullets.forEach((b, i) => {
+            b.x += b.vx;
+            if(b.x > boss.x && b.x < boss.x + boss.w && b.y > boss.y && b.y < boss.y + boss.h) {
+                bullets.splice(i, 1);
+                if(!boss.shield) {
+                    boss.hits++; boss.pain = 15;
+                    if(boss.hits >= 5) { boss.hp--; boss.hits = 0; heartText.innerText = "❤️".repeat(boss.hp); }
+                }
+            }
+        });
+        bullets = bullets.filter(b => b.x > -50 && b.x < w + 50);
+
+        if(boss.hp <= 0) { alert("VICTORY! Boss Defeated."); location.reload(); }
+        if(boss.x < hero.x + hero.w && hero.y + hero.h > boss.y) { alert("GAME OVER! Boss caught you."); location.reload(); }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, w, h);
+
+        // Background
+        ctx.fillStyle = '#87CEEB'; ctx.fillRect(0,0,w, groundY);
+        ctx.fillStyle = '#228B22'; ctx.fillRect(0, groundY, w, h - groundY);
+
+        // Draw Hero
+        ctx.save();
+        ctx.translate(hero.x + (hero.dir === -1 ? hero.w : 0), hero.y);
+        if(hero.dir === -1) ctx.scale(-1, 1);
+        ctx.fillStyle = 'red'; ctx.fillRect(-5, 15, 12, 60); // Cape
+        ctx.fillStyle = 'blue'; ctx.fillRect(0, 15, hero.w, hero.h - 30); // Suit
+        ctx.fillStyle = '#ffccba'; ctx.beginPath(); ctx.arc(hero.w/2, 15, 18, 0, Math.PI*2); ctx.fill(); // Head
+        ctx.fillStyle = '#333'; ctx.fillRect(hero.w - 5, 35, 20, 8); // Gun
+        ctx.restore();
+
+        // Draw Boss (Dark Muscular)
+        let bossColor = boss.pain > 0 ? '#ff4d4d' : '#222';
+        ctx.fillStyle = bossColor;
+        ctx.fillRect(boss.x, boss.y + 25, boss.w, boss.h - 25); // Torso
+        ctx.fillStyle = '#333';
+        ctx.beginPath(); ctx.arc(boss.x + boss.w/2, boss.y + 20, 25, 0, Math.PI*2); ctx.fill(); // Head
+        ctx.fillStyle = 'red'; ctx.fillRect(boss.x + 30, boss.y + 15, 6, 6); ctx.fillRect(boss.x + 55, boss.y + 15, 6, 6); // Eyes
+
+        if(boss.shield) {
+            ctx.strokeStyle = '#00f2ff'; ctx.lineWidth = 6;
+            ctx.beginPath(); ctx.arc(boss.x + 10, boss.y + 60, 80, Math.PI/2, Math.PI*1.5); ctx.stroke();
+        }
+
+        // Draw Bullets
+        ctx.fillStyle = '#ffff00';
+        bullets.forEach(b => ctx.fillRect(b.x, b.y, 16, 6));
+
+        update();
+        requestAnimationFrame(draw);
+    }
+
+    window.onload = () => { setup(); requestAnimationFrame(draw); };
+    window.onresize = setup;
+</script>
+</body>
+</html>
+
