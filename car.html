@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>3D Racer - Fun Sound Edition</title>
+    <style>
+        * { -webkit-tap-highlight-color: transparent; touch-action: none; user-select: none; }
+        body { margin: 0; padding: 0; overflow: hidden; background: #87CEEB; font-family: 'Arial Black', sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #hud { position: absolute; top: 20px; left: 20px; text-shadow: 2px 2px #000; pointer-events: none; z-index: 10; }
+        .hud-coin { color: #FFD700; font-size: 24px; }
+        .hud-ammo { color: #00FFFF; font-size: 24px; }
+        #safeTimer {
+            display: none; position: absolute; top: 80px; left: 50%; transform: translateX(-50%);
+            text-align: center; color: #ADFF2F; text-shadow: 3px 3px #000; z-index: 15;
+        }
+        #gameOverScreen {
+            display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); color: white; flex-direction: column;
+            align-items: center; justify-content: center; z-index: 30;
+        }
+        .restart-btn {
+            margin-top: 20px; padding: 15px 40px; font-size: 20px; 
+            background: #ff4e50; border: none; border-radius: 50px; color: #fff; font-weight: bold;
+            box-shadow: 0 0 15px #ff4e50; cursor: pointer;
+        }
+        .controls {
+            position: absolute; bottom: 40px; width: 100%;
+            display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box; z-index: 20;
+        }
+        .btn { width: 80px; height: 80px; background: rgba(0,0,0,0.4); border: 3px solid #fff; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+        #btn-fire { width: 90px; height: 90px; background: rgba(255,0,0,0.6); border: 4px solid #fff; color: white; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <div class="hud-coin">COINS: <span id="scoreVal">0</span></div>
+        <div class="hud-ammo">MISSILES: <span id="ammoVal">2</span></div>
+    </div>
+
+    <div id="safeTimer">
+        <div style="font-size: 24px; font-weight: bold;">SAVE</div>
+        <div id="timeLeft" style="font-size: 45px;">10</div>
+    </div>
+    
+    <div id="gameOverScreen">
+        <h1 style="color:red; font-size:45px;">WASTED!</h1>
+        <p style="font-size:20px;">Final Coins: <span id="finalScore">0</span></p>
+        <button class="restart-btn" onclick="restartGame()">RESTART</button>
+    </div>
+
+    <div class="controls">
+        <div id="btn-left" class="btn">L</div> 
+        <div id="btn-fire" class="btn">FIRE</div> 
+        <div id="btn-right" class="btn">R</div> 
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // --- UPGRADED FUN SOUND SYSTEM ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let musicStarted = false;
+
+        function playSound(freq, type, duration, vol, ramp = true) {
+            try {
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                osc.type = type;
+                osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+                gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+                if(ramp) gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + duration);
+            } catch(e) {}
+        }
+
+        // Fun Retro Background Tune
+        function startFunMusic() {
+            if (musicStarted) return;
+            musicStarted = true;
+            let notes = [130, 146, 164, 174, 196, 220, 246, 261]; // C major scale
+            let step = 0;
+            setInterval(() => {
+                if(!isGameOver) {
+                    // Bass Rhythm
+                    playSound(notes[step % 4] / 2, 'triangle', 0.2, 0.1);
+                    // Fast Arpeggio (Fun feel)
+                    if(step % 2 === 0) playSound(notes[step % notes.length], 'square', 0.1, 0.03);
+                    step++;
+                }
+            }, 200);
+        }
+
+        const sfx = {
+            coin: () => { playSound(800, 'sine', 0.1, 0.2); setTimeout(() => playSound(1200, 'sine', 0.1, 0.2), 50); },
+            fire: () => playSound(200, 'sawtooth', 0.2, 0.2),
+            hit: () => playSound(80, 'square', 0.5, 0.3),
+            over: () => { 
+                let f = 400;
+                let i = setInterval(() => {
+                    playSound(f, 'sawtooth', 0.1, 0.2); f -= 40;
+                    if(f < 100) clearInterval(i);
+                }, 100);
+            }
+        };
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+        window.addEventListener('resize', resize); resize();
+
+        let playerX = 0, roadOffset = 0, speed = 25, isLeft = false, isRight = false, score = 0, isGameOver = false;
+        let ammo = 2, isSafeMode = false, safeTimeLeft = 10, villainStunTime = 0;
+        let clouds = [{x: 100, y: 60, s: 0.15, scale: 1}, {x: 400, y: 90, s: 0.1, scale: 0.8}, {x: 700, y: 50, s: 0.2, scale: 1.2}];
+        let villain = { x: 0, z: 1100, targetX: 0 }; 
+        let bombs = [], coins = [], playerMissiles = [], frameCount = 0;
+
+        const setupBtn = (id) => {
+            const el = document.getElementById(id);
+            const start = (e) => { 
+                e.preventDefault(); 
+                if(audioCtx.state === 'suspended') audioCtx.resume();
+                startFunMusic(); 
+                if(isGameOver) return;
+                if(id === 'btn-left') isLeft = true; if(id === 'btn-right') isRight = true;
+                if(id === 'btn-fire') fireMissile();
+            };
+            const stop = (e) => { 
+                e.preventDefault();
+                if(id === 'btn-left') isLeft = false; if(id === 'btn-right') isRight = false;
+            };
+            el.addEventListener('touchstart', start); el.addEventListener('touchend', stop);
+            el.addEventListener('mousedown', start); el.addEventListener('mouseup', stop);
+        };
+        setupBtn('btn-left'); setupBtn('btn-right'); setupBtn('btn-fire');
+
+        function fireMissile() {
+            if(ammo > 0 && !isSafeMode) { 
+                playerMissiles.push({ x: playerX, z: 100 }); 
+                ammo--; 
+                sfx.fire();
+                document.getElementById('ammoVal').innerText = ammo; 
+            }
+        }
+
+        function restartGame() {
+            isGameOver = false; score = 0; playerX = 0; bombs = []; coins = []; ammo = 2; 
+            isSafeMode = false; villainStunTime = 0; playerMissiles = [];
+            document.getElementById('scoreVal').innerText = "0"; document.getElementById('ammoVal').innerText = "2";
+            document.getElementById('gameOverScreen').style.display = 'none'; document.getElementById('safeTimer').style.display = 'none';
+        }
+
+        function drawFluffyCloud(x, y, scale) {
+            ctx.fillStyle = "white"; ctx.beginPath();
+            ctx.arc(x, y, 25*scale, 0, 7); ctx.arc(x+25*scale, y-15*scale, 30*scale, 0, 7);
+            ctx.arc(x+55*scale, y-10*scale, 25*scale, 0, 7); ctx.fill();
+        }
+
+        function drawRoadObj(objX, objZ, type, w, h, horizon) {
+            let p = 200 / (200 + objZ);
+            let x = w / 2 + ((objX - playerX) * w * p * 0.7);
+            let y = horizon + (p * h * 0.55);
+            let sz = p * 165;
+            if (type === 'villain') {
+                ctx.fillStyle = (villainStunTime > 0) ? "#555" : "#111"; ctx.fillRect(x - sz/2, y - sz/2, sz, sz/2.5);
+                ctx.fillStyle = "red"; ctx.fillRect(x - sz/2.2, y-sz/4, sz/5, sz/12); ctx.fillRect(x + sz/4, y-sz/4, sz/5, sz/12);
+            } else if (type === 'bomb') {
+                ctx.fillStyle = "#000"; ctx.beginPath(); ctx.arc(x, y, sz/3.5, 0, 7); ctx.fill();
+                ctx.fillStyle = (frameCount % 10 < 5) ? "red" : "#330000";
+                ctx.beginPath(); ctx.arc(x, y - sz/4, sz/12, 0, 7); ctx.fill();
+            } else if (type === 'coin') {
+                ctx.fillStyle = "gold"; ctx.beginPath(); ctx.ellipse(x, y, Math.abs(Math.sin(Date.now()*0.01)*sz/4), sz/4, 0, 0, 7); ctx.fill();
+            } else if (type === 'missile') {
+                ctx.fillStyle = "cyan"; ctx.fillRect(x-5, y, 10, 40);
+            }
+        }
+
+        function update() {
+            if (isGameOver) { 
+                document.getElementById('finalScore').innerText = score; 
+                document.getElementById('gameOverScreen').style.display = 'flex'; 
+                requestAnimationFrame(update); return; 
+            }
+            frameCount++;
+            if (isLeft) playerX -= 0.055; if (isRight) playerX += 0.055;
+            playerX = Math.max(-1.25, Math.min(1.25, playerX));
+            roadOffset += speed;
+
+            if(score > 0 && score % 10 === 0 && !isSafeMode) {
+                isSafeMode = true; safeTimeLeft = 10; 
+                ammo = 2;
+                document.getElementById('ammoVal').innerText = ammo;
+                document.getElementById('safeTimer').style.display = 'block';
+                let timerInt = setInterval(() => {
+                    safeTimeLeft--; document.getElementById('timeLeft').innerText = safeTimeLeft;
+                    if(safeTimeLeft <= 0) { isSafeMode = false; score++; document.getElementById('scoreVal').innerText = score; document.getElementById('safeTimer').style.display = 'none'; clearInterval(timerInt); }
+                }, 1000);
+            }
+
+            villain.targetX = playerX; villain.x += (villain.targetX - villain.x) * 0.07;
+            if (villainStunTime > 0) villainStunTime--;
+
+            if (!isSafeMode) {
+                if (frameCount % 45 === 0 && villainStunTime <= 0) bombs.push({ x: villain.x, z: villain.z || 1100 });
+                if (frameCount % 85 === 0) coins.push({ x: Math.random()*2.4-1.2, z: 2000 });
+            }
+
+            playerMissiles.forEach((m, idx) => {
+                m.z += 50; 
+                if(m.z >= 1100 && Math.abs(m.x - villain.x) < 0.6) { 
+                    villainStunTime = 240; 
+                    playerMissiles.splice(idx, 1); 
+                    sfx.hit();
+                }
+            });
+
+            bombs.forEach(b => { 
+                b.z -= speed; 
+                if(b.z < 35 && b.z > -10 && Math.abs(b.x - playerX) < 0.45) {
+                    isGameOver = true;
+                    sfx.over();
+                }
+            });
+            
+            coins.forEach(c => { 
+                c.z -= speed; 
+                if(c.z < 35 && c.z > -10 && Math.abs(c.x - playerX) < 0.35 && !c.collected) { 
+                    score++; 
+                    c.collected = true; 
+                    sfx.coin();
+                    document.getElementById('scoreVal').innerText = score; 
+                }
+            });
+            
+            bombs = bombs.filter(b => b.z > -50); coins = coins.filter(c => c.z > -50 && !c.collected);
+            playerMissiles = playerMissiles.filter(m => m.z < 2500);
+
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            const w = canvas.width, h = canvas.height, horizon = h * 0.45, roadW = w * 1.5;
+            ctx.fillStyle = "#87CEEB"; ctx.fillRect(0, 0, w, h);
+            ctx.fillStyle = "#FDB813"; ctx.beginPath(); ctx.arc(w*0.8, 80, 40, 0, 7); ctx.fill();
+            clouds.forEach(c => { c.x = (c.x + c.s) % (w + 200); drawFluffyCloud(c.x, c.y, c.scale); });
+            ctx.fillStyle = "#2ecc71"; ctx.fillRect(0, horizon, w, h - horizon);
+
+            for (let i = 100; i > 0; i--) {
+                let z1 = i * 20 - (roadOffset % 20), p1 = 200 / (200 + z1), p2 = 200 / (200 + (i-1)*20 - (roadOffset%20));
+                let x1 = w/2 + (-playerX * w * p1 * 0.7), y1 = horizon + (p1 * h * 0.55), w1 = roadW * p1;
+                let x2 = w/2 + (-playerX * w * p2 * 0.7), y2 = horizon + (p2 * h * 0.55), w2 = roadW * p2;
+                ctx.fillStyle = (Math.floor((roadOffset + i * 20) / 100) % 2 === 0) ? "#333" : "#383838";
+                ctx.beginPath(); ctx.moveTo(x1-w1, y1); ctx.lineTo(x1+w1, y1); ctx.lineTo(x2+w2, y2+1); ctx.lineTo(x2-w2, y2+1); ctx.fill();
+                ctx.fillStyle = (Math.floor((roadOffset + i * 20) / 40) % 2 === 0) ? "#fff" : "#e74c3c";
+                ctx.fillRect(x1-w1-10*p1, y1, 10*p1, 21); ctx.fillRect(x1+w1, y1, 10*p1, 21);
+            }
+            coins.forEach(c => drawRoadObj(c.x, c.z, 'coin', w, h, horizon));
+            bombs.forEach(b => drawRoadObj(b.x, b.z, 'bomb', w, h, horizon));
+            playerMissiles.forEach(m => drawRoadObj(m.x, m.z, 'missile', w, h, horizon));
+            drawRoadObj(villain.x, 1100, 'villain', w, h, horizon);
+            
+            let cW = 120, cH = 60, cX = w/2 - cW/2, cY = h - 140 + Math.sin(Date.now()*0.02)*2;
+            ctx.fillStyle = "#111"; ctx.fillRect(cX+5, cY+35, 25, 20); ctx.fillRect(cX+90, cY+35, 25, 20);
+            ctx.fillStyle = "#ff0000"; ctx.beginPath(); ctx.roundRect(cX, cY+15, cW, 35, 8); ctx.fill();
+            ctx.fillStyle = "#000"; ctx.fillRect(cX-10, cY+5, cW+20, 6);
+        }
+        update();
+    </script>
+</body>
+</html>
